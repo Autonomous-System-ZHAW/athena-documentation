@@ -2,6 +2,8 @@
 
 This repository contains the documentation for the Athena project, covering its setup, codebase, and development workflow. It provides a high-level overview of the system, the components it uses, and the development and deployment process.
 
+![Branching model](images/athena-smaller.jpg)
+
 For more detailed documentation, see the Notion workspace.
 
 ## Contents
@@ -11,6 +13,63 @@ For more detailed documentation, see the Notion workspace.
 - [Software Stack Overview](#software-stack-overview)
 - [Simulation Stack Overview](#simulation-stack-overview)
 - [Hardware Overview](#hardware-overview)
+
+
+## Vehicle Parameters
+
+### Geometry
+
+| Parameter   | Symbol | Value | Unit |
+|:------------|:------:|------:|:-----|
+| Wheelbase   | $L$    | 0.26  | m    |
+| Track width | $b$    | 0.17  | m    |
+
+### Steering
+
+| Parameter                  | Right  | Center | Left  | Unit |
+|:---------------------------|-------:|-------:|------:|:-----|
+| Servo value                | 0.27   | 0.50   | 0.73  | –    |
+| Mechanical steering angle  | −0.26  | 0      | 0.26  | rad  |
+| Software limit (clipped)   | −0.25  | 0      | 0.25  | rad  |
+
+Steering-to-servo gain: **0.86** (same for both sides)
+
+$$
+\text{servo} = 0.5 + 0.86 \cdot \delta, \qquad |\delta| \le 0.25\ \text{rad}
+$$
+
+> **Note:** The software limit of ±0.25 rad keeps the steering slightly below the mechanical limit of ±0.26 rad.
+
+### Drive
+
+| Parameter          | Value  | Unit       |
+|:-------------------|-------:|:-----------|
+| Speed-to-ERPM gain | 3793.0 | ERPM/(m/s) |
+| Speed-to-ERPM offset | 0.0  | ERPM       |
+
+$$
+\text{ERPM} = 3793.0 \cdot v
+$$
+
+**Example:** Command a speed of 1 m/s:
+
+```bash
+ros2 topic pub -r 20 /commands/motor/speed std_msgs/msg/Float64 "{data: 3793.0}"
+```
+
+### Frequency
+
+| Component | Topic / Source | Rate | Note |
+|:----------|:---------------|-----:|:-----|
+| Lidar | `/scan` | 10 Hz | |
+| VESC state polling | `/sensors/core` | tbd | Set in driver |
+| VESC IMU | `/sensors/imu` | tbd | Set in driver |
+| Odometry | `/odom` | tbd | Follows `/sensors/core` |
+| Drive commands | `/ackermann_cmd` | tbd | Rate of the controller / planner |
+| Steering command | `/commands/servo/position` | tbd | To be measured |
+| Vicon tracking | Vicon system | tbd | - |
+| Simulation physics step | Simulator | tbd | - |
+
 
 ## Branching Model
 
@@ -60,6 +119,46 @@ real sensors or the simulation.
 
 # Software Stack Overview
 
+## Interfaces
+### VESC Controller Interface
+
+
+#### vesc_driver_node (package `vesc_driver`)
+
+| Topic | Message Type | Direction | Description |
+|---|---|---|---|
+| `/commands/motor/speed` | `std_msgs/Float64` | sub | Target motor speed in ERPM (limited to ±23250) |
+| `/commands/servo/position` | `std_msgs/Float64` | sub | Target servo position, 0..1 (limited to 0.27–0.73) |
+| `/commands/motor/current` | `std_msgs/Float64` | sub | Target motor current in A (0–100) |
+| `/commands/motor/brake` | `std_msgs/Float64` | sub | Brake current |
+| `/commands/motor/duty_cycle` | `std_msgs/Float64` | sub | Duty cycle (limited to 0 in config, i.e. disabled) |
+| `/commands/motor/position` | `std_msgs/Float64` | sub | Motor position (limited to 0 in config, i.e. disabled) |
+| `/sensors/core` | `vesc_msgs/VescStateStamped` | pub | VESC telemetry: speed, current, voltage, temperature, tachometer, etc. |
+| `/sensors/servo_position_command` | `std_msgs/Float64` | pub | Last commanded servo position (the VESC gives no real servo feedback) |
+| `/sensors/imu` | `vesc_msgs/VescImuStamped` | pub | VESC IMU (roll/pitch/yaw, acceleration, angular velocity) |
+| `/sensors/imu/raw` | `sensor_msgs/Imu` | pub | Same IMU data as a standard ROS message |
+
+#### ackermann_to_vesc_node (package `vesc_ackermann`)
+
+| Topic | Message Type | Direction | Description |
+|---|---|---|---|
+| `/ackermann_cmd` | `ackermann_msgs/AckermannDriveStamped` | sub | Drive command: speed in m/s, steering angle in rad |
+| `/commands/motor/speed` | `std_msgs/Float64` | pub | Computed target speed in ERPM |
+| `/commands/servo/position` | `std_msgs/Float64` | pub | Computed servo position 0..1 |
+
+#### vesc_to_odom_node (package `vesc_ackermann`)
+
+| Topic | Message Type | Direction | Description |
+|---|---|---|---|
+| `/sensors/core` | `vesc_msgs/VescStateStamped` | sub | Motor speed for velocity estimation |
+| `/sensors/servo_position_command` | `std_msgs/Float64` | sub | Servo position for yaw rate (only if `use_servo_cmd_to_calc_angular_velocity: true`) |
+| `/odom` | `nav_msgs/Odometry` | pub | Odometry, frame `odom` → `base_link` |
+| `/tf` | `tf2_msgs/TFMessage` | pub | Transform `odom` → `base_link` (only if `publish_tf: true`) |
+
+**Notes:**
+- Left and right steering use separate gains (`steering_angle_to_servo_gain_left/right`), both currently set to 0.86.
+
+## Components
 Todo: Add a diagram of the software stack and describe the components.
 
 
